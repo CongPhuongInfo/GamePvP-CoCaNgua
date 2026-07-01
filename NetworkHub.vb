@@ -119,6 +119,15 @@ Public Class NetworkHub
         Next i
     End Sub
 
+    ''' <summary>Gui cho tat ca Client dang ket noi, tru seat chi dinh (dung khi relay
+    ''' lai 1 tin nhan chat ma chinh Client do vua gui len, tranh hien thi trung lap).</summary>
+    Public Sub BroadcastExcept(line As String, exceptSeat As Integer)
+        Dim i As Integer
+        For i = 1 To MAX_CLIENTS
+            If i <> exceptSeat AndAlso slotUsed(i) Then SendToClient(i, line)
+        Next i
+    End Sub
+
     Public Function ConnectedCount() As Integer
         Dim c As Integer = 0
         Dim i As Integer
