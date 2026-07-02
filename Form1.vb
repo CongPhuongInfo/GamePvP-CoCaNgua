@@ -5,6 +5,7 @@ Imports System.Drawing
 Imports System.Drawing.Drawing2D
 Imports System.Windows.Forms
 Imports System.Collections.Generic
+Imports System.IO
 
 Public Class Form1
     Inherits Form
@@ -12,7 +13,7 @@ Public Class Form1
     Private Const DEFAULT_PORT As Integer = 9988
     Private Const BOARD_SIZE As Integer = 560
     Private Const HOME_MARGIN As Integer = 90    ' kich thuoc vung chuong o moi goc
-    Private Const TOKEN_RADIUS As Integer = 11
+    Private Const TOKEN_RADIUS As Integer = 13
 
     ' Mau tung nguoi choi: 0=Do, 1=Xanh la, 2=Vang, 3=Xanh duong
     Private Shared ReadOnly PlayerColor() As Color = {Color.FromArgb(220, 50, 47), Color.FromArgb(46, 139, 87), Color.FromArgb(218, 165, 32), Color.FromArgb(30, 100, 200)}
@@ -40,7 +41,6 @@ Public Class Form1
     Private boardPanel As Panel
     Private lblTurn As Label
     Private lblYouAre As Label
-    Private lblDice As Label
     Private btnRoll As Button
     Private btnPass As Button
     Private btnRestart As Button
@@ -62,9 +62,52 @@ Public Class Form1
     End Structure
     Private tokenHitAreas As New List(Of TokenHitArea)()
 
+    ' === Sprite (co fallback ve hinh khoi neu thieu file, giong MineForm.vb) ===
+    Private horseSprite(3) As Image             ' anh ngua theo tung player, Nothing neu thieu file
+    Private diceSprite(6) As Image               ' anh xuc xac mat 1..6 (index 0 khong dung)
+    Private spritesLoaded As Boolean = False
+
+    ' === Xuc xac quay 6 mat khi do ===
+    Private picDice As Panel
+    Private diceAnimTimer As System.Windows.Forms.Timer
+    Private diceAnimStep As Integer = 0
+    Private diceAnimTargetValue As Integer = 1
+    Private diceFaceShown As Integer = 0          ' 0 = chua do (trang thai cho)
+    Private diceAnimRng As New Random()
+    Private wasDiceRolledPrev As Boolean = False
+    Private Const DICE_ANIM_STEPS As Integer = 9
+    Private Const DICE_ANIM_INTERVAL_MS As Integer = 70
+
     Public Sub New()
+        LoadSprites()
         InitUI()
     End Sub
+
+    ' ============================================================
+    '  LOAD SPRITE (co fallback ve hinh khoi neu thieu file)
+    ' ============================================================
+    Private Sub LoadSprites()
+        Try
+            Dim dir As String = Path.Combine(Application.StartupPath, "Assets")
+            horseSprite(0) = LoadImg(dir, "horse_do.png")
+            horseSprite(1) = LoadImg(dir, "horse_xanhla.png")
+            horseSprite(2) = LoadImg(dir, "horse_vang.png")
+            horseSprite(3) = LoadImg(dir, "horse_xanhduong.png")
+            Dim v As Integer
+            For v = 1 To 6
+                diceSprite(v) = LoadImg(dir, "dice_" & v.ToString() & ".png")
+            Next v
+            spritesLoaded = True
+        Catch ex As Exception
+            spritesLoaded = False
+        End Try
+    End Sub
+
+    Private Function LoadImg(dir As String, name As String) As Image
+        Dim p As String = Path.Combine(dir, name)
+        If File.Exists(p) Then Return Image.FromFile(p)
+        Return Nothing
+    End Function
 
     Private Sub InitUI()
         Me.Text = "Co Ca Ngua Online - 2CongLC"
@@ -158,34 +201,34 @@ Public Class Form1
         lblTurn.Font = New Font("Segoe UI", 10.0!)
         pnlGame.Controls.Add(lblTurn)
 
-        lblDice = New Label() : lblDice.Location = New Point(sideX, 90) : lblDice.AutoSize = True
-        lblDice.Font = New Font("Segoe UI", 22.0!, FontStyle.Bold)
-        lblDice.Text = "-"
-        pnlGame.Controls.Add(lblDice)
+        picDice = New Panel()
+        picDice.Location = New Point(sideX, 85) : picDice.Size = New Size(64, 64)
+        AddHandler picDice.Paint, AddressOf PicDice_Paint
+        pnlGame.Controls.Add(picDice)
 
         btnRoll = New Button() : btnRoll.Text = "Do xuc xac"
-        btnRoll.Location = New Point(sideX, 140) : btnRoll.Size = New Size(140, 36)
+        btnRoll.Location = New Point(sideX, 157) : btnRoll.Size = New Size(140, 36)
         AddHandler btnRoll.Click, AddressOf BtnRoll_Click
         pnlGame.Controls.Add(btnRoll)
 
         btnPass = New Button() : btnPass.Text = "Bo luot"
-        btnPass.Location = New Point(sideX + 150, 140) : btnPass.Size = New Size(110, 36)
+        btnPass.Location = New Point(sideX + 150, 157) : btnPass.Size = New Size(110, 36)
         btnPass.Visible = False
         AddHandler btnPass.Click, AddressOf BtnPass_Click
         pnlGame.Controls.Add(btnPass)
 
         Dim p As Integer
         For p = 0 To 3
-            pnlPlayers(p) = BuildPlayerCard(p, New Point(sideX, 185 + p * 64), 290)
+            pnlPlayers(p) = BuildPlayerCard(p, New Point(sideX, 201 + p * 64), 290)
             pnlGame.Controls.Add(pnlPlayers(p))
         Next p
 
         btnRestart = New Button() : btnRestart.Text = "Choi lai (Host)"
-        btnRestart.Location = New Point(sideX, 445) : btnRestart.Size = New Size(290, 30)
+        btnRestart.Location = New Point(sideX, 459) : btnRestart.Size = New Size(290, 30)
         AddHandler btnRestart.Click, AddressOf BtnRestart_Click
         pnlGame.Controls.Add(btnRestart)
 
-        BuildChatPanel(sideX, 290, 485, 660 - 485 - 15)
+        BuildChatPanel(sideX, 290, 497, 660 - 497 - 15)
 
         Me.Controls.Add(pnlGame)
     End Sub
@@ -281,6 +324,77 @@ Public Class Form1
         If lstChat Is Nothing Then Return
         lstChat.Items.Add(msg)
         lstChat.TopIndex = Math.Max(0, lstChat.Items.Count - 1)
+    End Sub
+
+    ' ============================================================
+    '  XUC XAC QUAY 6 MAT (chi hieu ung hinh anh, ket qua da co san)
+    ' ============================================================
+    ''' <summary>Bat dau hieu ung quay: doi nhanh qua cac mat ngau nhien roi dung lai
+    ''' dung o gia tri thuc te (targetValue) da duoc xuc xac quyet dinh.</summary>
+    Private Sub StartDiceAnim(targetValue As Integer)
+        diceAnimTargetValue = targetValue
+        diceAnimStep = 0
+        If diceAnimTimer Is Nothing Then
+            diceAnimTimer = New System.Windows.Forms.Timer()
+            diceAnimTimer.Interval = DICE_ANIM_INTERVAL_MS
+            AddHandler diceAnimTimer.Tick, AddressOf DiceAnimTimer_Tick
+        End If
+        diceFaceShown = diceAnimRng.Next(1, 7)
+        picDice.Invalidate()
+        diceAnimTimer.Start()
+    End Sub
+
+    Private Sub DiceAnimTimer_Tick(sender As Object, e As EventArgs)
+        diceAnimStep += 1
+        If diceAnimStep >= DICE_ANIM_STEPS Then
+            diceAnimTimer.Stop()
+            diceFaceShown = diceAnimTargetValue
+        Else
+            diceFaceShown = diceAnimRng.Next(1, 7)
+        End If
+        picDice.Invalidate()
+    End Sub
+
+    Private Sub PicDice_Paint(sender As Object, e As PaintEventArgs)
+        Dim g As Graphics = e.Graphics
+        g.SmoothingMode = SmoothingMode.AntiAlias
+        Dim rect As New Rectangle(0, 0, picDice.Width, picDice.Height)
+        Dim accent As Color = If(game IsNot Nothing, PlayerColor(game.CurrentPlayer), Color.DimGray)
+
+        If diceFaceShown >= 1 AndAlso diceFaceShown <= 6 AndAlso spritesLoaded AndAlso diceSprite(diceFaceShown) IsNot Nothing Then
+            g.DrawImage(diceSprite(diceFaceShown), rect)
+        ElseIf diceFaceShown >= 1 AndAlso diceFaceShown <= 6 Then
+            ' Fallback: khong co sprite, ve khoi trang + so
+            Using b As New SolidBrush(Color.White)
+                g.FillRectangle(b, rect)
+            End Using
+            Using pen As New Pen(accent, 3)
+                g.DrawRectangle(pen, 1, 1, rect.Width - 2, rect.Height - 2)
+            End Using
+            Using sf As New StringFormat()
+                sf.Alignment = StringAlignment.Center
+                sf.LineAlignment = StringAlignment.Center
+                Using fnt As New Font("Segoe UI", 26.0!, FontStyle.Bold)
+                    Using textBrush As New SolidBrush(accent)
+                        g.DrawString(diceFaceShown.ToString(), fnt, textBrush, New RectangleF(rect.X, rect.Y, rect.Width, rect.Height), sf)
+                    End Using
+                End Using
+            End Using
+        Else
+            ' Chua do: khung cho voi dau "-"
+            Using pen As New Pen(Color.LightGray, 2)
+                g.DrawRectangle(pen, 1, 1, rect.Width - 2, rect.Height - 2)
+            End Using
+            Using sf As New StringFormat()
+                sf.Alignment = StringAlignment.Center
+                sf.LineAlignment = StringAlignment.Center
+                Using fnt As New Font("Segoe UI", 22.0!, FontStyle.Bold)
+                    Using textBrush As New SolidBrush(Color.LightGray)
+                        g.DrawString("-", fnt, textBrush, New RectangleF(rect.X, rect.Y, rect.Width, rect.Height), sf)
+                    End Using
+                End Using
+            End Using
+        End If
     End Sub
 
     ' ============================================================
@@ -453,28 +567,59 @@ Public Class Form1
                         End Using
                     End If
 
-                    ' Than quan
-                    Using b As New SolidBrush(PlayerColor(p))
-                        g.FillEllipse(b, rect)
-                    End Using
+                    ' Than quan: dung sprite ngua neu co, khong thi fallback ve hinh tron nhu cu
+                    If spritesLoaded AndAlso horseSprite(p) IsNot Nothing Then
+                        g.DrawImage(horseSprite(p), rect)
 
-                    ' Vien: vang = co the di, trang = quan minh, xam = quan doi
-                    Dim borderColor As Color = If(canClick, Color.Yellow, If(isMyToken, Color.White, Color.FromArgb(180, 180, 180)))
-                    Dim borderWidth As Single = If(canClick, 3.0F, If(isMyToken, 1.5F, 1.0F))
-                    Using pen As New Pen(borderColor, borderWidth)
-                        g.DrawEllipse(pen, rect)
-                    End Using
+                        If canClick OrElse isMyToken Then
+                            Dim ringColor As Color = If(canClick, Color.Yellow, Color.White)
+                            Dim ringWidth As Single = If(canClick, 3.0F, 1.5F)
+                            Using pen As New Pen(ringColor, ringWidth)
+                                g.DrawEllipse(pen, rect.X - 1, rect.Y - 1, rect.Width + 2, rect.Height + 2)
+                            End Using
+                        End If
 
-                    ' So thu tu quan (1-4)
-                    Using sf As New StringFormat()
-                        sf.Alignment = StringAlignment.Center
-                        sf.LineAlignment = StringAlignment.Center
-                        Using fnt As New Font("Arial", 7.0!, FontStyle.Bold)
-                            Using textBrush As New SolidBrush(Color.White)
-                                g.DrawString((t + 1).ToString(), fnt, textBrush, New RectangleF(rect.X, rect.Y, rect.Width, rect.Height), sf)
+                        ' So thu tu quan: hien o goc duoi-phai bang 1 huy hieu tron nho, khong che mat ngua
+                        Dim badgeSize As Integer = 13
+                        Dim badgeRect As New Rectangle(rect.Right - badgeSize + 3, rect.Bottom - badgeSize + 3, badgeSize, badgeSize)
+                        Using bb As New SolidBrush(Color.FromArgb(235, 255, 255, 255))
+                            g.FillEllipse(bb, badgeRect)
+                        End Using
+                        Using bp As New Pen(PlayerColor(p), 1.0F)
+                            g.DrawEllipse(bp, badgeRect)
+                        End Using
+                        Using sf2 As New StringFormat()
+                            sf2.Alignment = StringAlignment.Center
+                            sf2.LineAlignment = StringAlignment.Center
+                            Using fnt2 As New Font("Arial", 6.5!, FontStyle.Bold)
+                                Using tb2 As New SolidBrush(PlayerColor(p))
+                                    g.DrawString((t + 1).ToString(), fnt2, tb2, New RectangleF(badgeRect.X, badgeRect.Y, badgeRect.Width, badgeRect.Height), sf2)
+                                End Using
                             End Using
                         End Using
-                    End Using
+                    Else
+                        Using b As New SolidBrush(PlayerColor(p))
+                            g.FillEllipse(b, rect)
+                        End Using
+
+                        ' Vien: vang = co the di, trang = quan minh, xam = quan doi
+                        Dim borderColor As Color = If(canClick, Color.Yellow, If(isMyToken, Color.White, Color.FromArgb(180, 180, 180)))
+                        Dim borderWidth As Single = If(canClick, 3.0F, If(isMyToken, 1.5F, 1.0F))
+                        Using pen As New Pen(borderColor, borderWidth)
+                            g.DrawEllipse(pen, rect)
+                        End Using
+
+                        ' So thu tu quan (1-4)
+                        Using sf As New StringFormat()
+                            sf.Alignment = StringAlignment.Center
+                            sf.LineAlignment = StringAlignment.Center
+                            Using fnt As New Font("Arial", 7.0!, FontStyle.Bold)
+                                Using textBrush As New SolidBrush(Color.White)
+                                    g.DrawString((t + 1).ToString(), fnt, textBrush, New RectangleF(rect.X, rect.Y, rect.Width, rect.Height), sf)
+                                End Using
+                            End Using
+                        End Using
+                    End If
 
                     Dim hit As TokenHitArea
                     hit.Rect = rect
@@ -753,8 +898,13 @@ Public Class Form1
             lblTurn.Text = "Luot cua Player " & (game.CurrentPlayer + 1).ToString() & "..."
         End If
 
-        lblDice.Text = If(game.DiceRolled, game.DiceValue.ToString(), "-")
-        lblDice.ForeColor = PlayerColor(game.CurrentPlayer)
+        If game.DiceRolled AndAlso Not wasDiceRolledPrev Then
+            StartDiceAnim(game.DiceValue)
+        ElseIf Not game.DiceRolled AndAlso Not (diceAnimTimer IsNot Nothing AndAlso diceAnimTimer.Enabled) Then
+            diceFaceShown = 0
+            picDice.Invalidate()
+        End If
+        wasDiceRolledPrev = game.DiceRolled
 
         btnRoll.Enabled = myTurn AndAlso Not game.DiceRolled AndAlso Not game.GameOver
         Dim noMove As Boolean = myTurn AndAlso game.DiceRolled AndAlso Not game.HasAnyMove(localSeat, game.DiceValue)

@@ -39,6 +39,14 @@ if errorlevel 1 (
 ) else (
     echo.
     echo [OK] Build thanh cong: %OUTEXE%
+    if exist "Assets" (
+        echo Da thay thu muc Assets ^(sprite ngua + xuc xac^) canh file exe - OK.
+    ) else (
+        echo [CANH BAO] Khong thay thu muc Assets canh file .bat nay.
+        echo            Game van chay binh thuong nhung se fallback ve hinh khoi don gian
+        echo            thay vi sprite. Dat thu muc Assets ^(horse_do.png, dice_1.png, ...^)
+        echo            cung cap voi %OUTEXE% de hien sprite.
+    )
 )
 
 pause
